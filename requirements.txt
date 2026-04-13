@@ -1,0 +1,4 @@
+pyspark
+delta-spark
+requests
+azure-storage-blob

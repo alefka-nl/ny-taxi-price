@@ -30,7 +30,8 @@
 									"type": "BinarySource",
 									"storeSettings": {
 										"type": "HttpReadSettings",
-										"requestMethod": "GET"
+										"requestMethod": "GET",
+										"additionalHeaders": "User-Agent: Mozilla/5.0"
 									},
 									"formatSettings": {
 										"type": "BinaryReadSettings"
@@ -46,7 +47,7 @@
 							},
 							"inputs": [
 								{
-									"referenceName": "Binary2",
+									"referenceName": "HTTP_dataset",
 									"type": "DatasetReference"
 								}
 							],

@@ -27,13 +27,13 @@
 							"userProperties": [],
 							"typeProperties": {
 								"source": {
-									"type": "ParquetSource",
+									"type": "BinarySource",
 									"storeSettings": {
 										"type": "HttpReadSettings",
 										"requestMethod": "GET"
 									},
 									"formatSettings": {
-										"type": "ParquetReadSettings"
+										"type": "BinaryReadSettings"
 									}
 								},
 								"sink": {
@@ -46,7 +46,7 @@
 							},
 							"inputs": [
 								{
-									"referenceName": "Parquet1",
+									"referenceName": "Binary2",
 									"type": "DatasetReference"
 								}
 							],

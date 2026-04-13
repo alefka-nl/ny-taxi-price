@@ -1,0 +1,17 @@
+{
+	"name": "Binary2",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "NY_Taxi",
+			"type": "LinkedServiceReference"
+		},
+		"annotations": [],
+		"type": "Binary",
+		"typeProperties": {
+			"location": {
+				"type": "HttpServerLocation",
+				"relativeUrl": "@concat('https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-', item(), '.parquet')"
+			}
+		}
+	}
+}

@@ -24,10 +24,10 @@ The target architecture follows this flow:
 
 ```text
 project-root/
-├── notebooks/
-│   ├── 01_ingest.ipynb
-│   ├── 02_transform.ipynb
-│   ├── 03_ml.ipynb
+├── notebook/
+│   ├── 01_ingest.json
+│   ├── 02_transform.json
+│   ├── 03_ml.json
 ├── src/
 │   ├── config.py
 │   ├── paths.py
@@ -114,6 +114,12 @@ pip install -r requirements.txt
 1. `notebooks/01_ingest.ipynb`
 2. `notebooks/02_transform.ipynb`
 3. `notebooks/03_ml.ipynb`
+
+### Synapse-native option
+
+If you are working directly in Azure Synapse Studio, import the JSON artifacts from `notebook/` instead of the plain `.ipynb` files.
+
+These Synapse notebook artifacts already embed the helper logic that also exists in `src/`, so you do not need to package and deploy the external Python modules separately just to run the notebooks in Synapse.
 
 ### 3. Run in Synapse or local Spark
 

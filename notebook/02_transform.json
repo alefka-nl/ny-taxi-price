@@ -1,0 +1,204 @@
+{
+  "name": "02_transform",
+  "type": "Microsoft.Synapse/workspaces/notebooks",
+  "properties": {
+    "description": "Bronze, Silver, and Gold medallion transformations in Azure Synapse Spark.",
+    "nbformat": 4,
+    "nbformat_minor": 5,
+    "bigDataPool": {
+      "referenceName": "sparkpool01",
+      "type": "BigDataPoolReference"
+    },
+    "sessionProperties": {
+      "driverMemory": "28g",
+      "driverCores": 4,
+      "executorMemory": "28g",
+      "executorCores": 4,
+      "numExecutors": 4
+    },
+    "metadata": {
+      "kernel_info": {
+        "name": "synapse_pyspark"
+      },
+      "language_info": {
+        "name": "python"
+      },
+      "saveOutput": false
+    },
+    "cells": [
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "# 02 Transform - Synapse Artifact\n",
+          "\n",
+          "This notebook implements the medallion transformation flow directly inside the Synapse artifact so it can run without any external Python modules."
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Embedded configuration and path helpers"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "import os\n",
+          "from dataclasses import dataclass\n",
+          "\n",
+          "\n",
+          "def _get_env(name: str, default: str) -> str:\n",
+          "    return os.getenv(name, default)\n",
+          "\n",
+          "\n",
+          "@dataclass(frozen=True)\n",
+          "class AzureConfig:\n",
+          "    storage_account: str = _get_env(\"AZURE_STORAGE_ACCOUNT\", \"nytaxistorage\")\n",
+          "    container: str = _get_env(\"AZURE_STORAGE_CONTAINER\", \"taxi-data\")\n",
+          "    raw_prefix: str = _get_env(\"AZURE_TAXI_RAW_PREFIX\", \"raw/taxi\")\n",
+          "    bronze_prefix: str = _get_env(\"AZURE_TAXI_BRONZE_PREFIX\", \"bronze/taxi\")\n",
+          "    silver_prefix: str = _get_env(\"AZURE_TAXI_CURATED_PREFIX\", \"silver/taxi\")\n",
+          "    gold_prefix: str = _get_env(\"AZURE_TAXI_GOLD_PREFIX\", \"gold/taxi\")\n",
+          "\n",
+          "\n",
+          "AZURE_CONFIG = AzureConfig()\n",
+          "\n",
+          "\n",
+          "def azure_path(prefix: str) -> str:\n",
+          "    return (\n",
+          "        f\"abfss://{AZURE_CONFIG.container}@{AZURE_CONFIG.storage_account}\"\n",
+          "        f\".dfs.core.windows.net/{prefix.strip('/')}/\"\n",
+          "    )\n",
+          "\n",
+          "\n",
+          "RAW_PATH = azure_path(AZURE_CONFIG.raw_prefix)\n",
+          "BRONZE_PATH = azure_path(AZURE_CONFIG.bronze_prefix)\n",
+          "SILVER_PATH = azure_path(AZURE_CONFIG.silver_prefix)\n",
+          "GOLD_PATH = azure_path(AZURE_CONFIG.gold_prefix)"
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Embedded transformation helpers"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "from pyspark.sql import functions as F\n",
+          "\n",
+          "\n",
+          "def clean_taxi_data(df):\n",
+          "    return (\n",
+          "        df.filter(F.col(\"fare_amount\").isNotNull())\n",
+          "        .filter(F.col(\"fare_amount\") >= 0)\n",
+          "        .filter(F.col(\"trip_distance\").isNotNull())\n",
+          "        .filter(F.col(\"tpep_pickup_datetime\").isNotNull())\n",
+          "    )\n",
+          "\n",
+          "\n",
+          "def add_time_features(df):\n",
+          "    return df.withColumn(\"hour\", F.hour(F.col(\"tpep_pickup_datetime\")))\n",
+          "\n",
+          "\n",
+          "def aggregate_revenue_by_location(df):\n",
+          "    return (\n",
+          "        df.groupBy(\"PULocationID\")\n",
+          "        .agg(\n",
+          "            F.sum(\"fare_amount\").alias(\"total_revenue\"),\n",
+          "            F.count(\"*\").alias(\"trip_count\"),\n",
+          "            F.avg(\"fare_amount\").alias(\"avg_fare_amount\"),\n",
+          "        )\n",
+          "        .orderBy(F.desc(\"total_revenue\"))\n",
+          "    )"
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Read raw parquet with schema evolution"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "raw_df = (\n",
+          "    spark.read.format(\"parquet\")\n",
+          "    .option(\"mergeSchema\", \"true\")\n",
+          "    .load(RAW_PATH)\n",
+          ")\n",
+          "\n",
+          "print(f\"Raw path: {RAW_PATH}\")\n",
+          "raw_df.printSchema()"
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Write Bronze, Silver, and Gold Delta layers"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "(\n",
+          "    raw_df.write.format(\"delta\")\n",
+          "    .mode(\"overwrite\")\n",
+          "    .option(\"overwriteSchema\", \"true\")\n",
+          "    .save(BRONZE_PATH)\n",
+          ")\n",
+          "\n",
+          "bronze_df = spark.read.format(\"delta\").load(BRONZE_PATH)\n",
+          "silver_df = add_time_features(clean_taxi_data(bronze_df))\n",
+          "\n",
+          "(\n",
+          "    silver_df.write.format(\"delta\")\n",
+          "    .mode(\"overwrite\")\n",
+          "    .option(\"overwriteSchema\", \"true\")\n",
+          "    .save(SILVER_PATH)\n",
+          ")\n",
+          "\n",
+          "gold_df = aggregate_revenue_by_location(silver_df)\n",
+          "\n",
+          "(\n",
+          "    gold_df.write.format(\"delta\")\n",
+          "    .mode(\"overwrite\")\n",
+          "    .option(\"overwriteSchema\", \"true\")\n",
+          "    .save(GOLD_PATH)\n",
+          ")\n",
+          "\n",
+          "print(f\"Bronze path: {BRONZE_PATH}\")\n",
+          "print(f\"Silver path: {SILVER_PATH}\")\n",
+          "print(f\"Gold path: {GOLD_PATH}\")\n",
+          "gold_df.show(20, truncate=False)"
+        ]
+      }
+    ]
+  }
+}

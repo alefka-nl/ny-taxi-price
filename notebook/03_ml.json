@@ -1,0 +1,204 @@
+{
+  "name": "03_ml",
+  "type": "Microsoft.Synapse/workspaces/notebooks",
+  "properties": {
+    "description": "Spark MLlib notebook for NYC taxi fare prediction in Synapse.",
+    "nbformat": 4,
+    "nbformat_minor": 5,
+    "bigDataPool": {
+      "referenceName": "sparkpool01",
+      "type": "BigDataPoolReference"
+    },
+    "sessionProperties": {
+      "driverMemory": "28g",
+      "driverCores": 4,
+      "executorMemory": "28g",
+      "executorCores": 4,
+      "numExecutors": 4
+    },
+    "metadata": {
+      "kernel_info": {
+        "name": "synapse_pyspark"
+      },
+      "language_info": {
+        "name": "python"
+      },
+      "saveOutput": false
+    },
+    "cells": [
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "# 03 ML - Synapse Artifact\n",
+          "\n",
+          "This notebook trains a baseline linear regression model in Synapse Spark and persists both predictions and the trained model. The notebook embeds the former `src` ML helpers directly in code cells."
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Embedded configuration and path helpers"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "import os\n",
+          "from dataclasses import dataclass\n",
+          "\n",
+          "\n",
+          "def _get_env(name: str, default: str) -> str:\n",
+          "    return os.getenv(name, default)\n",
+          "\n",
+          "\n",
+          "@dataclass(frozen=True)\n",
+          "class AzureConfig:\n",
+          "    storage_account: str = _get_env(\"AZURE_STORAGE_ACCOUNT\", \"nytaxistorage\")\n",
+          "    container: str = _get_env(\"AZURE_STORAGE_CONTAINER\", \"taxi-data\")\n",
+          "    silver_prefix: str = _get_env(\"AZURE_TAXI_CURATED_PREFIX\", \"silver/taxi\")\n",
+          "    ml_prefix: str = _get_env(\"AZURE_TAXI_ML_PREFIX\", \"ml/taxi\")\n",
+          "    model_prefix: str = _get_env(\"AZURE_TAXI_MODEL_PREFIX\", \"ml/models/taxi_fare_lr\")\n",
+          "\n",
+          "\n",
+          "AZURE_CONFIG = AzureConfig()\n",
+          "\n",
+          "\n",
+          "def azure_path(prefix: str) -> str:\n",
+          "    return (\n",
+          "        f\"abfss://{AZURE_CONFIG.container}@{AZURE_CONFIG.storage_account}\"\n",
+          "        f\".dfs.core.windows.net/{prefix.strip('/')}/\"\n",
+          "    )\n",
+          "\n",
+          "\n",
+          "SILVER_PATH = azure_path(AZURE_CONFIG.silver_prefix)\n",
+          "ML_PATH = azure_path(AZURE_CONFIG.ml_prefix)\n",
+          "MODEL_PATH = azure_path(AZURE_CONFIG.model_prefix)"
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Embedded feature selection and training helpers"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "from pyspark.ml import Pipeline\n",
+          "from pyspark.ml.evaluation import RegressionEvaluator\n",
+          "from pyspark.ml.feature import VectorAssembler\n",
+          "from pyspark.ml.regression import LinearRegression\n",
+          "\n",
+          "FEATURE_COLUMNS = [\"trip_distance\", \"PULocationID\", \"DOLocationID\", \"hour\"]\n",
+          "LABEL_COLUMN = \"fare_amount\"\n",
+          "\n",
+          "\n",
+          "def select_model_columns(df):\n",
+          "    return df.select(\n",
+          "        \"fare_amount\",\n",
+          "        \"trip_distance\",\n",
+          "        \"PULocationID\",\n",
+          "        \"DOLocationID\",\n",
+          "        \"hour\",\n",
+          "    ).dropna()\n",
+          "\n",
+          "\n",
+          "def train_fare_model(df, train_ratio: float = 0.8, seed: int = 42):\n",
+          "    assembler = VectorAssembler(\n",
+          "        inputCols=FEATURE_COLUMNS,\n",
+          "        outputCol=\"features\",\n",
+          "        handleInvalid=\"skip\",\n",
+          "    )\n",
+          "    regressor = LinearRegression(\n",
+          "        featuresCol=\"features\",\n",
+          "        labelCol=LABEL_COLUMN,\n",
+          "        predictionCol=\"prediction\",\n",
+          "    )\n",
+          "    pipeline = Pipeline(stages=[assembler, regressor])\n",
+          "    train_df, test_df = df.randomSplit([train_ratio, 1 - train_ratio], seed=seed)\n",
+          "    model = pipeline.fit(train_df)\n",
+          "    predictions = model.transform(test_df)\n",
+          "    evaluator = RegressionEvaluator(\n",
+          "        labelCol=LABEL_COLUMN,\n",
+          "        predictionCol=\"prediction\",\n",
+          "        metricName=\"rmse\",\n",
+          "    )\n",
+          "    rmse = evaluator.evaluate(predictions)\n",
+          "    return model, predictions, rmse"
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Read Silver Delta data and train the model"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "silver_df = spark.read.format(\"delta\").load(SILVER_PATH)\n",
+          "model_df = select_model_columns(silver_df)\n",
+          "model, predictions_df, rmse = train_fare_model(model_df)\n",
+          "\n",
+          "print(f\"Silver input path: {SILVER_PATH}\")\n",
+          "print(f\"Model RMSE: {rmse:.4f}\")"
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Persist predictions and model artifacts"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "(\n",
+          "    predictions_df.write.format(\"delta\")\n",
+          "    .mode(\"overwrite\")\n",
+          "    .option(\"overwriteSchema\", \"true\")\n",
+          "    .save(ML_PATH)\n",
+          ")\n",
+          "\n",
+          "model.write().overwrite().save(MODEL_PATH)\n",
+          "\n",
+          "print(f\"Predictions path: {ML_PATH}\")\n",
+          "print(f\"Model path: {MODEL_PATH}\")\n",
+          "predictions_df.select(\n",
+          "    \"fare_amount\",\n",
+          "    \"trip_distance\",\n",
+          "    \"PULocationID\",\n",
+          "    \"DOLocationID\",\n",
+          "    \"hour\",\n",
+          "    \"prediction\",\n",
+          ").show(20, truncate=False)"
+        ]
+      }
+    ]
+  }
+}

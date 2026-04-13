@@ -1,0 +1,161 @@
+{
+  "name": "01_ingest",
+  "type": "Microsoft.Synapse/workspaces/notebooks",
+  "properties": {
+    "description": "ADF-style ingestion notebook for NYC taxi parquet data into ADLS Gen2.",
+    "nbformat": 4,
+    "nbformat_minor": 5,
+    "bigDataPool": {
+      "referenceName": "sparkpool01",
+      "type": "BigDataPoolReference"
+    },
+    "sessionProperties": {
+      "driverMemory": "28g",
+      "driverCores": 4,
+      "executorMemory": "28g",
+      "executorCores": 4,
+      "numExecutors": 2
+    },
+    "metadata": {
+      "kernel_info": {
+        "name": "synapse_pyspark"
+      },
+      "language_info": {
+        "name": "python"
+      },
+      "saveOutput": false
+    },
+    "cells": [
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "# 01 Ingest - Synapse Artifact\n",
+          "\n",
+          "This Synapse notebook simulates an Azure Data Factory ingestion flow. It downloads the public January 2023 NYC yellow taxi parquet file and uploads it into the raw zone of Azure Data Lake Storage Gen2.\n",
+          "\n",
+          "The notebook is self-contained so it can be imported directly into Synapse Studio without depending on the external `src/` folder."
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Embedded configuration helpers"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "import os\n",
+          "from dataclasses import dataclass\n",
+          "\n",
+          "\n",
+          "def _get_env(name: str, default: str) -> str:\n",
+          "    return os.getenv(name, default)\n",
+          "\n",
+          "\n",
+          "@dataclass(frozen=True)\n",
+          "class AzureConfig:\n",
+          "    storage_account: str = _get_env(\"AZURE_STORAGE_ACCOUNT\", \"nytaxistorage\")\n",
+          "    container: str = _get_env(\"AZURE_STORAGE_CONTAINER\", \"taxi-data\")\n",
+          "    raw_prefix: str = _get_env(\"AZURE_TAXI_RAW_PREFIX\", \"raw/taxi\")\n",
+          "    blob_connection_string: str = _get_env(\"AZURE_BLOB_CONNECTION_STRING\", \"\")\n",
+          "\n",
+          "\n",
+          "AZURE_CONFIG = AzureConfig()"
+        ]
+      },
+      {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+          "## Download and upload logic"
+        ]
+      },
+      {
+        "cell_type": "code",
+        "execution_count": null,
+        "metadata": {
+          "language": "python"
+        },
+        "outputs": [],
+        "source": [
+          "import time\n",
+          "from pathlib import Path\n",
+          "\n",
+          "import requests\n",
+          "from azure.storage.blob import BlobServiceClient\n",
+          "\n",
+          "SOURCE_URL = \"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-01.parquet\"\n",
+          "FILE_NAME = \"yellow_tripdata_2023-01.parquet\"\n",
+          "LOCAL_DOWNLOAD_DIR = Path(os.getenv(\"LOCAL_DOWNLOAD_DIR\", \"/tmp/nyc_taxi_ingest\"))\n",
+          "LOCAL_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)\n",
+          "LOCAL_FILE_PATH = LOCAL_DOWNLOAD_DIR / FILE_NAME\n",
+          "\n",
+          "HEADERS = {\n",
+          "    \"User-Agent\": \"nyc-taxi-synapse-ingest/1.0\",\n",
+          "    \"Accept\": \"application/octet-stream\",\n",
+          "}\n",
+          "\n",
+          "MAX_RETRIES = int(os.getenv(\"INGEST_MAX_RETRIES\", \"3\"))\n",
+          "BACKOFF_SECONDS = int(os.getenv(\"INGEST_BACKOFF_SECONDS\", \"5\"))\n",
+          "TARGET_BLOB_PATH = f\"{AZURE_CONFIG.raw_prefix.strip('/')}/{FILE_NAME}\"\n",
+          "\n",
+          "\n",
+          "def download_with_retry(url: str, destination: Path, headers: dict, max_retries: int = 3, backoff_seconds: int = 5) -> Path:\n",
+          "    last_error = None\n",
+          "    for attempt in range(1, max_retries + 1):\n",
+          "        try:\n",
+          "            with requests.get(url, headers=headers, stream=True, timeout=60) as response:\n",
+          "                response.raise_for_status()\n",
+          "                with open(destination, \"wb\") as handle:\n",
+          "                    for chunk in response.iter_content(chunk_size=1024 * 1024):\n",
+          "                        if chunk:\n",
+          "                            handle.write(chunk)\n",
+          "            return destination\n",
+          "        except requests.RequestException as exc:\n",
+          "            last_error = exc\n",
+          "            print(f\"Attempt {attempt} failed: {exc}\")\n",
+          "            if attempt < max_retries:\n",
+          "                time.sleep(backoff_seconds * attempt)\n",
+          "\n",
+          "    raise RuntimeError(f\"Download failed after {max_retries} attempts\") from last_error\n",
+          "\n",
+          "\n",
+          "downloaded_file = download_with_retry(\n",
+          "    url=SOURCE_URL,\n",
+          "    destination=LOCAL_FILE_PATH,\n",
+          "    headers=HEADERS,\n",
+          "    max_retries=MAX_RETRIES,\n",
+          "    backoff_seconds=BACKOFF_SECONDS,\n",
+          ")\n",
+          "\n",
+          "if not AZURE_CONFIG.blob_connection_string:\n",
+          "    raise ValueError(\"AZURE_BLOB_CONNECTION_STRING is not set. Configure it before upload.\")\n",
+          "\n",
+          "blob_service_client = BlobServiceClient.from_connection_string(AZURE_CONFIG.blob_connection_string)\n",
+          "blob_client = blob_service_client.get_blob_client(\n",
+          "    container=AZURE_CONFIG.container,\n",
+          "    blob=TARGET_BLOB_PATH,\n",
+          ")\n",
+          "\n",
+          "with open(downloaded_file, \"rb\") as data:\n",
+          "    blob_client.upload_blob(data, overwrite=True)\n",
+          "\n",
+          "raw_abfss_path = (\n",
+          "    f\"abfss://{AZURE_CONFIG.container}@{AZURE_CONFIG.storage_account}\"\n",
+          "    f\".dfs.core.windows.net/{TARGET_BLOB_PATH}\"\n",
+          ")\n",
+          "\n",
+          "print(f\"Uploaded source file to: {raw_abfss_path}\")"
+        ]
+      }
+    ]
+  }
+}

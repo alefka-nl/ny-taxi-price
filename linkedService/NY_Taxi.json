@@ -1,12 +1,19 @@
 {
 	"name": "NY_Taxi",
+	"type": "Microsoft.Synapse/workspaces/linkedservices",
 	"properties": {
 		"annotations": [],
 		"type": "HttpServer",
 		"typeProperties": {
 			"url": "https://d37ci6vzurychx.cloudfront.net/trip-data/",
 			"enableServerCertificateValidation": true,
-			"authenticationType": "Anonymous"
+			"authenticationType": "Anonymous",
+			"authHeaders": {
+				"User-Agent": {
+					"type": "SecureString",
+					"value": "**********"
+				}
+			}
 		},
 		"connectVia": {
 			"referenceName": "AutoResolveIntegrationRuntime",

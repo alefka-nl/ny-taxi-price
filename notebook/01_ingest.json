@@ -18,7 +18,7 @@
 				"spark.dynamicAllocation.enabled": "false",
 				"spark.dynamicAllocation.minExecutors": "2",
 				"spark.dynamicAllocation.maxExecutors": "2",
-				"spark.autotune.trackingId": "a016cb4f-51b1-4f20-8b2f-3e97b0d85a88"
+				"spark.autotune.trackingId": "d860b938-c996-48d9-8c3c-b9c70b141ffc"
 			}
 		},
 		"metadata": {
@@ -68,7 +68,7 @@
 					"    \"NYTaxiKeyVault\"\n",
 					")"
 				],
-				"execution_count": 2
+				"execution_count": 3
 			},
 			{
 				"cell_type": "markdown",
